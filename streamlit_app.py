@@ -1,151 +1,248 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
-
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Global variables
+DATE_COLUMNS = ['Start Date', 'Due Date', 'Created At', 'Completed At', 'Last Modified']
+NUMERIC_COLUMNS = ['Estimated Hours', 'Total Hours Estimate', 'Number of Delays', 'Harvest Hours']
 
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def load_and_process_data(file):
+    df = pd.read_csv(file)
+    for col in DATE_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+    df['Duration'] = (df['Due Date'] - df['Start Date']).dt.days
+    df['Completion_Status'] = df.apply(lambda row: 'Completed' if pd.notnull(row['Completed At']) 
+                                       else 'Overdue' if row.get('Overdue') == True 
+                                       else 'In Progress', axis=1)
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    for col in NUMERIC_COLUMNS:
+        if col not in df.columns:
+            df[col] = 0
+        else:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+    if 'Task Status' not in df.columns:
+        df['Task Status'] = 'In Progress'  # Default or derive from other data
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
+    return df
+
+@st.cache_data
+def create_interactive_gantt(df, selected_projects, selected_statuses):
+    filtered_df = df[
+        (df['Projects'].isin(selected_projects)) &
+        (df['Task Status'].isin(selected_statuses))
+    ]
+
+    fig = px.timeline(filtered_df, x_start="Start Date", x_end="Due Date", y="Name", color="Task Status",
+                      hover_data=["Task ID", "Projects", "Estimated Hours", "Task Status"],
+                      title="Interactive Project Timeline")
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(height=600, xaxis_title="Date", yaxis_title="Task Name")
+
+    # Add range slider
+    fig.update_xaxes(rangeslider_visible=True)
+
+    # Add buttons for time range selection
+    fig.update_layout(
+        updatemenus=[
+            dict(
+                type="buttons",
+                direction="right",
+                x=0.7,
+                y=1.2,
+                showactive=True,
+                buttons=list([
+                    dict(label="All",
+                         method="relayout",
+                         args=[{"xaxis.range": [filtered_df['Start Date'].min(), filtered_df['Due Date'].max()]}]),
+                    dict(label="Next Month",
+                         method="relayout",
+                         args=[{"xaxis.range": [datetime.now(), datetime.now() + timedelta(days=30)]}]),
+                    dict(label="Next Week",
+                         method="relayout",
+                         args=[{"xaxis.range": [datetime.now(), datetime.now() + timedelta(days=7)]}]),
+                ]),
+            )
+        ]
     )
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+    return fig
 
-    return gdp_df
+@st.cache_data
+def create_task_status_distribution(df):
+    status_counts = df['Completion_Status'].value_counts()
+    fig = px.pie(status_counts, values=status_counts.values, names=status_counts.index, 
+                 title="Task Status Distribution")
+    fig.update_traces(textposition='inside', textinfo='percent+label')
+    fig.update_layout(height=400)
+    return fig
 
-gdp_df = get_gdp_data()
+@st.cache_data
+def create_workload_by_assignee(df):
+    workload = df.groupby('Assignee')['Estimated Hours'].sum().sort_values(ascending=False)
+    fig = px.bar(workload, x=workload.index, y=workload.values, 
+                 title="Workload by Assignee", labels={'y': 'Estimated Hours', 'x': 'Assignee'})
+    fig.update_layout(height=500)
+    return fig
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+@st.cache_data
+def create_task_completion_trend(df):
+    df['Completion_Week'] = df['Completed At'].dt.to_period('W').astype(str)
+    completion_trend = df[df['Completion_Status'] == 'Completed'].groupby('Completion_Week').size().reset_index(name='Completed Tasks')
+    fig = px.line(completion_trend, x='Completion_Week', y='Completed Tasks', title="Task Completion Trend")
+    fig.update_layout(height=400)
+    return fig
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+@st.cache_data
+def create_delay_analysis(df):
+    delay_by_project = df.groupby('Projects')['Number of Delays'].mean().sort_values(ascending=False)
+    fig = px.bar(delay_by_project, x=delay_by_project.index, y=delay_by_project.values,
+                 title="Average Number of Delays by Project", labels={'y': 'Average Delays', 'x': 'Project'})
+    fig.update_layout(height=400)
+    return fig
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+@st.cache_data
+def create_estimated_vs_actual_hours(df):
+    fig = px.scatter(df, x='Estimated Hours', y='Harvest Hours', color='Projects', 
+                     hover_name='Name', title='Estimated vs Actual Hours')
+    fig.add_trace(go.Scatter(x=[0, df['Estimated Hours'].max()], 
+                             y=[0, df['Estimated Hours'].max()], 
+                             mode='lines', name='Perfect Estimation'))
+    fig.update_layout(height=500)
+    return fig
 
-# Add some spacing
-''
-''
+@st.cache_data
+def create_billable_hours_chart(df):
+    billable_hours = df.groupby('Billable or Non-Billable')['Harvest Hours'].sum().reset_index()
+    fig = px.pie(billable_hours, values='Harvest Hours', names='Billable or Non-Billable',
+                 title='Billable vs Non-Billable Hours')
+    fig.update_traces(textposition='inside', textinfo='percent+label')
+    fig.update_layout(height=400)
+    return fig
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
+@st.cache_data
+def create_job_category_distribution(df):
+    job_category_counts = df['Job Category'].value_counts()
+    fig = px.bar(job_category_counts, x=job_category_counts.index, y=job_category_counts.values,
+                 title="Distribution of Job Categories", labels={'y': 'Number of Tasks', 'x': 'Job Category'})
+    fig.update_layout(height=500)
+    return fig
 
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
+def main():
+    st.set_page_config(layout="wide", page_title="Enhanced Project Management Dashboard")
 
-countries = gdp_df['Country Code'].unique()
+    st.title("Enhanced Interactive Project Management Dashboard")
 
-if not len(countries):
-    st.warning("Select at least one country")
+    uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
+    if uploaded_file is not None:
+        df = load_and_process_data(uploaded_file)
 
-''
-''
-''
+        # Sidebar for filters
+        st.sidebar.title("Filters")
+        selected_projects = st.sidebar.multiselect("Filter by Project", options=df['Projects'].unique(), default=df['Projects'].unique())
+        selected_statuses = st.sidebar.multiselect("Filter by Task Status", options=df['Task Status'].unique(), default=df['Task Status'].unique())
 
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
+        # Project Overview
+        st.header("Project Overview")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Total Tasks", len(df))
+        col2.metric("Completed Tasks", len(df[df['Completion_Status'] == 'Completed']))
+        col3.metric("Overdue Tasks", len(df[df['Completion_Status'] == 'Overdue']))
+        col4.metric("Total Estimated Hours", f"{df['Estimated Hours'].sum():.2f}")
+        col5.metric("Total Actual Hours", f"{df['Harvest Hours'].sum():.2f}")
 
-st.header('GDP over time', divider='gray')
+        # Interactive Gantt Chart
+        st.subheader("Interactive Project Timeline (Gantt Chart)")
+        gantt_fig = create_interactive_gantt(df, selected_projects, selected_statuses)
+        st.plotly_chart(gantt_fig, use_container_width=True)
 
-''
+        # Apply filters for other visualizations
+        filtered_df = df[
+            (df['Projects'].isin(selected_projects)) &
+            (df['Task Status'].isin(selected_statuses))
+        ]
 
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
+        # Task Status and Workload
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Task Status Distribution")
+            status_fig = create_task_status_distribution(filtered_df)
+            st.plotly_chart(status_fig, use_container_width=True)
 
-''
-''
+        with col2:
+            st.subheader("Workload by Assignee")
+            workload_fig = create_workload_by_assignee(filtered_df)
+            st.plotly_chart(workload_fig, use_container_width=True)
 
+        # Task Completion and Delay Analysis
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Task Completion Trend")
+            trend_fig = create_task_completion_trend(filtered_df)
+            st.plotly_chart(trend_fig, use_container_width=True)
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+        with col2:
+            st.subheader("Delay Analysis")
+            delay_fig = create_delay_analysis(filtered_df)
+            st.plotly_chart(delay_fig, use_container_width=True)
 
-st.header(f'GDP in {to_year}', divider='gray')
+        # Estimated vs Actual Hours
+        st.subheader("Estimated vs Actual Hours")
+        hours_fig = create_estimated_vs_actual_hours(filtered_df)
+        st.plotly_chart(hours_fig, use_container_width=True)
 
-''
+        # Billable Hours Chart
+        st.subheader("Billable vs Non-Billable Hours")
+        billable_fig = create_billable_hours_chart(filtered_df)
+        st.plotly_chart(billable_fig, use_container_width=True)
 
-cols = st.columns(4)
+        # Job Category Distribution
+        st.subheader("Job Category Distribution")
+        job_category_fig = create_job_category_distribution(filtered_df)
+        st.plotly_chart(job_category_fig, use_container_width=True)
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
+        # Summary statistics
+        st.subheader("Project Summary")
+        st.write(f"Total number of tasks: {len(filtered_df)}")
+        st.write(f"Project start date: {filtered_df['Start Date'].min().date()}")
+        st.write(f"Project end date: {filtered_df['Due Date'].max().date()}")
+        st.write(f"Number of unique assignees: {filtered_df['Assignee'].nunique()}")
+        st.write(f"Total estimated hours: {filtered_df['Estimated Hours'].sum():.2f}")
+        st.write(f"Total actual hours: {filtered_df['Harvest Hours'].sum():.2f}")
 
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
+        # Overdue tasks
+        overdue_tasks = filtered_df[filtered_df['Completion_Status'] == 'Overdue']
+        st.write(f"Number of overdue tasks: {len(overdue_tasks)}")
 
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
+        # Task completion status
+        completed_tasks = filtered_df[filtered_df['Completion_Status'] == 'Completed']
+        st.write(f"Completed tasks: {len(completed_tasks)} ({len(completed_tasks)/len(filtered_df)*100:.2f}%)")
 
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+        # Custom Analysis
+        st.header("Custom Analysis")
+        chart_type = st.selectbox("Select Chart Type", ["Bar Chart", "Scatter Plot", "Line Chart"])
+        x_axis = st.selectbox("Select X-axis", filtered_df.columns)
+        y_axis = st.selectbox("Select Y-axis", [col for col in filtered_df.columns if filtered_df[col].dtype in ['int64', 'float64']])
+        color_by = st.selectbox("Color by", ['None'] + filtered_df.columns.tolist())
+        
+        if chart_type == "Bar Chart":
+            custom_fig = px.bar(filtered_df, x=x_axis, y=y_axis, color=color_by if color_by != 'None' else None,
+                                title=f"{y_axis} by {x_axis}")
+        elif chart_type == "Scatter Plot":
+            custom_fig = px.scatter(filtered_df, x=x_axis, y=y_axis, color=color_by if color_by != 'None' else None,
+                                    title=f"{y_axis} vs {x_axis}")
+        else:  # Line Chart
+            custom_fig = px.line(filtered_df, x=x_axis, y=y_axis, color=color_by if color_by != 'None' else None,
+                                 title=f"{y_axis} over {x_axis}")
+        
+        custom_fig.update_layout(height=600)
+        st.plotly_chart(custom_fig, use_container_width=True)
+
+if __name__ == "__main__":
+    main()
