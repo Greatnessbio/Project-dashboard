@@ -14,40 +14,33 @@ def load_and_process_data(file):
     for col in DATE_COLUMNS:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
-
+    
     df['Duration'] = (df['Due Date'] - df['Start Date']).dt.days
     df['Completion_Status'] = df.apply(lambda row: 'Completed' if pd.notnull(row['Completed At']) 
                                        else 'Overdue' if row.get('Overdue') == True 
                                        else 'In Progress', axis=1)
-
+    
     for col in NUMERIC_COLUMNS:
         if col not in df.columns:
             df[col] = 0
         else:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-    if 'Task Status' not in df.columns:
-        df['Task Status'] = 'In Progress'  # Default or derive from other data
-
+    
     return df
 
 @st.cache_data
 def create_interactive_gantt(df, selected_projects, selected_statuses):
     filtered_df = df[
         (df['Projects'].isin(selected_projects)) &
-        (df['Task Status'].isin(selected_statuses))
+        (df['Deliverable Status'].isin(selected_statuses))
     ]
-
-    fig = px.timeline(filtered_df, x_start="Start Date", x_end="Due Date", y="Name", color="Task Status",
-                      hover_data=["Task ID", "Projects", "Estimated Hours", "Task Status"],
+    
+    fig = px.timeline(filtered_df, x_start="Start Date", x_end="Due Date", y="Name", color="Deliverable Status",
+                      hover_data=["Task ID", "Projects", "Estimated Hours", "Deliverable Status"],
                       title="Interactive Project Timeline")
     fig.update_yaxes(autorange="reversed")
     fig.update_layout(height=600, xaxis_title="Date", yaxis_title="Task Name")
-
-    # Add range slider
     fig.update_xaxes(rangeslider_visible=True)
-
-    # Add buttons for time range selection
     fig.update_layout(
         updatemenus=[
             dict(
@@ -134,20 +127,15 @@ def create_job_category_distribution(df):
     return fig
 
 def main():
-    st.set_page_config(layout="wide", page_title="Enhanced Project Management Dashboard")
-
-    st.title("Enhanced Interactive Project Management Dashboard")
-
+    st.set_page_config(layout="wide", page_title="Interactive PM Dashboard")
+    
+    st.title("Comprehensive Interactive Project Management Dashboard")
+    
     uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
-
+    
     if uploaded_file is not None:
         df = load_and_process_data(uploaded_file)
-
-        # Sidebar for filters
-        st.sidebar.title("Filters")
-        selected_projects = st.sidebar.multiselect("Filter by Project", options=df['Projects'].unique(), default=df['Projects'].unique())
-        selected_statuses = st.sidebar.multiselect("Filter by Task Status", options=df['Task Status'].unique(), default=df['Task Status'].unique())
-
+        
         # Project Overview
         st.header("Project Overview")
         col1, col2, col3, col4, col5 = st.columns(5)
@@ -156,74 +144,84 @@ def main():
         col3.metric("Overdue Tasks", len(df[df['Completion_Status'] == 'Overdue']))
         col4.metric("Total Estimated Hours", f"{df['Estimated Hours'].sum():.2f}")
         col5.metric("Total Actual Hours", f"{df['Harvest Hours'].sum():.2f}")
+        
+        # Task filtering
+        st.subheader("Task Filtering")
+        
+        # Filter by Project
+        projects = df['Projects'].dropna().unique().tolist()
+        selected_projects = st.multiselect("Filter by Project", options=projects, default=projects)
+        
+        # Filter by Deliverable Status
+        statuses = df['Deliverable Status'].dropna().unique().tolist()
+        selected_statuses = st.multiselect("Filter by Deliverable Status", options=statuses, default=statuses)
 
         # Interactive Gantt Chart
         st.subheader("Interactive Project Timeline (Gantt Chart)")
         gantt_fig = create_interactive_gantt(df, selected_projects, selected_statuses)
         st.plotly_chart(gantt_fig, use_container_width=True)
-
+        
         # Apply filters for other visualizations
         filtered_df = df[
             (df['Projects'].isin(selected_projects)) &
-            (df['Task Status'].isin(selected_statuses))
+            (df['Deliverable Status'].isin(selected_statuses))
         ]
-
+        
         # Task Status and Workload
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Task Status Distribution")
             status_fig = create_task_status_distribution(filtered_df)
             st.plotly_chart(status_fig, use_container_width=True)
-
+        
         with col2:
             st.subheader("Workload by Assignee")
             workload_fig = create_workload_by_assignee(filtered_df)
             st.plotly_chart(workload_fig, use_container_width=True)
-
+        
         # Task Completion and Delay Analysis
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Task Completion Trend")
             trend_fig = create_task_completion_trend(filtered_df)
             st.plotly_chart(trend_fig, use_container_width=True)
-
+        
         with col2:
             st.subheader("Delay Analysis")
             delay_fig = create_delay_analysis(filtered_df)
             st.plotly_chart(delay_fig, use_container_width=True)
-
+        
         # Estimated vs Actual Hours
         st.subheader("Estimated vs Actual Hours")
         hours_fig = create_estimated_vs_actual_hours(filtered_df)
         st.plotly_chart(hours_fig, use_container_width=True)
-
+        
         # Billable Hours Chart
         st.subheader("Billable vs Non-Billable Hours")
-        billable_fig = create_billable_hours_chart(filtered_df)
+                billable_fig = create_billable_hours_chart(filtered_df)
         st.plotly_chart(billable_fig, use_container_width=True)
-
+        
         # Job Category Distribution
         st.subheader("Job Category Distribution")
         job_category_fig = create_job_category_distribution(filtered_df)
         st.plotly_chart(job_category_fig, use_container_width=True)
-
+        
         # Summary statistics
         st.subheader("Project Summary")
         st.write(f"Total number of tasks: {len(filtered_df)}")
         st.write(f"Project start date: {filtered_df['Start Date'].min().date()}")
         st.write(f"Project end date: {filtered_df['Due Date'].max().date()}")
-        st.write(f"Number of unique assignees: {filtered_df['Assignee'].nunique()}")
+        st.write(f"Number of assignees: {filtered_df['Assignee'].nunique()}")
         st.write(f"Total estimated hours: {filtered_df['Estimated Hours'].sum():.2f}")
-        st.write(f"Total actual hours: {filtered_df['Harvest Hours'].sum():.2f}")
-
+        
         # Overdue tasks
-        overdue_tasks = filtered_df[filtered_df['Completion_Status'] == 'Overdue']
+        overdue_tasks = filtered_df[filtered_df['Overdue'] == True]
         st.write(f"Number of overdue tasks: {len(overdue_tasks)}")
 
         # Task completion status
-        completed_tasks = filtered_df[filtered_df['Completion_Status'] == 'Completed']
+        completed_tasks = filtered_df[filtered_df['Completed At'].notna()]
         st.write(f"Completed tasks: {len(completed_tasks)} ({len(completed_tasks)/len(filtered_df)*100:.2f}%)")
-
+        
         # Custom Analysis
         st.header("Custom Analysis")
         chart_type = st.selectbox("Select Chart Type", ["Bar Chart", "Scatter Plot", "Line Chart"])
