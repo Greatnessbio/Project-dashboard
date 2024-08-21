@@ -198,7 +198,7 @@ def main():
         
         # Billable Hours Chart
         st.subheader("Billable vs Non-Billable Hours")
-                billable_fig = create_billable_hours_chart(filtered_df)
+        billable_fig = create_billable_hours_chart(filtered_df)
         st.plotly_chart(billable_fig, use_container_width=True)
         
         # Job Category Distribution
