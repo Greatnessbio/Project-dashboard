@@ -1,2 +1,5 @@
 streamlit
-pandas
+pandas 
+plotly 
+altair 
+streamlit-timeline
